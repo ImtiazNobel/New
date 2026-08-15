@@ -1,0 +1,183 @@
+// ResearchHub — Prisma schema
+// Run `npx prisma migrate dev --name init` after setting DATABASE_URL in .env
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  STUDENT
+  SUPERVISOR
+}
+
+model User {
+  id       String  @id @default(cuid())
+  name     String
+  email    String  @unique
+  password String? // bcrypt hash; null if the account was created via Google
+  image    String?
+  role     Role?   // null until the user completes role selection right after signup
+
+  // --- profile fields (shared table for simplicity; student/supervisor use a subset) ---
+  university        String?
+  fieldOfInterest   String?
+  designation       String?
+  department        String?
+  researchAreas     String? // comma-separated, matches the existing UI's tag-picker format
+  skills            String? // comma-separated (students)
+  projectIdeas      String?
+  publications      String? // newline-separated "Title (Year) — Journal" entries
+  bio               String?
+  phone             String?
+  roomNo            String?
+  website           String?
+  acceptingStudents Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // NextAuth
+  accounts Account[]
+  sessions Session[]
+
+  // Messaging
+  sentMessages     Message[] @relation("SentMessages")
+  receivedMessages Message[] @relation("ReceivedMessages")
+  messageReads     MessageRead[]
+
+  // Reviews (student -> supervisor)
+  reviewsGiven    Review[] @relation("ReviewsGiven")
+  reviewsReceived Review[] @relation("ReviewsReceived")
+
+  // Bookmarks (student saves supervisor)
+  bookmarksMade      Bookmark[] @relation("BookmarksMade")
+  bookmarkedBySome   Bookmark[] @relation("BookmarkedSupervisor")
+
+  // Recommendations (supervisor -> supervisor, about a student)
+  recommendationsSent     Recommendation[] @relation("RecommendationsFrom")
+  recommendationsReceived Recommendation[] @relation("RecommendationsTo")
+  recommendedAsStudent    Recommendation[] @relation("RecommendedStudent")
+  recommendationReadAt    DateTime?
+
+  @@map("users")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  text      String
+  createdAt DateTime @default(now())
+
+  from User @relation("SentMessages", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("ReceivedMessages", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@index([fromId, toId])
+  @@index([toId, fromId])
+  @@map("messages")
+}
+
+// Tracks, per user, when they last read each conversation (for unread badges)
+model MessageRead {
+  id         String   @id @default(cuid())
+  userId     String
+  contactId  String
+  lastReadAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, contactId])
+  @@map("message_reads")
+}
+
+model Review {
+  id           String   @id @default(cuid())
+  studentId    String
+  supervisorId String
+  rating       Int // 1-5
+  text         String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student    User @relation("ReviewsGiven", fields: [studentId], references: [id], onDelete: Cascade)
+  supervisor User @relation("ReviewsReceived", fields: [supervisorId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, supervisorId]) // one review per student per supervisor; re-submit = update
+  @@map("reviews")
+}
+
+model Bookmark {
+  id           String   @id @default(cuid())
+  studentId    String
+  supervisorId String
+  createdAt    DateTime @default(now())
+
+  student    User @relation("BookmarksMade", fields: [studentId], references: [id], onDelete: Cascade)
+  supervisor User @relation("BookmarkedSupervisor", fields: [supervisorId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, supervisorId])
+  @@map("bookmarks")
+}
+
+model Recommendation {
+  id        String   @id @default(cuid())
+  studentId String
+  fromId    String
+  toId      String
+  note      String?
+  createdAt DateTime @default(now())
+
+  student User @relation("RecommendedStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  from    User @relation("RecommendationsFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to      User @relation("RecommendationsTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@index([toId])
+  @@index([fromId])
+  @@map("recommendations")
+}
+
+// --- NextAuth required models (Prisma adapter) ---
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
